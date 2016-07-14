@@ -4,6 +4,7 @@
 db
 *.crt
 *.key
+alembic.ini
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -6,6 +6,7 @@ import logging
 import os.path
 import re
 import sys
+from collections import defaultdict
 from functools import wraps
 
 import requests
@@ -20,6 +21,7 @@ from flask import (Flask,
                    jsonify)
 from flask_sslify import SSLify
 from sqlalchemy.sql.expression import case
+from sqlalchemy import delete
 
 from pulseguardian import config, management as pulse_management
 from pulseguardian.logs import setup_logging
@@ -27,6 +29,7 @@ from pulseguardian.model.base import db_session, init_db
 from pulseguardian.model.pulse_user import PulseUser
 from pulseguardian.model.user import User
 from pulseguardian.model.queue import Queue
+from model.invite import Invite
 
 # Development cert/key base filename.
 DEV_CERT_BASE = 'dev'
@@ -131,12 +134,13 @@ def requires_login(f):
 def inject_user():
     """Injects a user and configuration in templates' context."""
     cur_user = User.query.filter(User.email == session.get('email')).first()
+    invites = Invite.query.filter(Invite.user_id == g.user.id).count()
     if cur_user and cur_user.pulse_users:
         pulse_user = cur_user.pulse_users[0]
     else:
         pulse_user = None
     return dict(cur_user=cur_user, pulse_user=pulse_user, config=config,
-                session=session)
+                session=session, invites=invites)
 
 
 @app.before_request
@@ -191,14 +195,29 @@ def profile(error=None, messages=None):
                            no_owner_queues=no_owner_queues,
                            error=error, messages=messages)
 
+
 @app.route('/all_pulse_users')
 @requires_login
 def all_pulse_users():
     users = db_session.query(
         PulseUser.username,
-        case([(User.email == None, "None")], else_=User.email)).outerjoin(
-            User, User.id == PulseUser.owner_id).all()
+        case([(User.email == None, "None")], else_=User.email)).join(
+            User.pulse_users).all()
+
+    # Converting users list of tuples into dictionary
+    # grouping users by pulse_user.
+    dict_users = defaultdict(list)
+    for pulse_user, user in users:
+        dict_users[pulse_user].append(user)
+
+    # Update users list of tuples, merging users into strings.
+    del users[:]
+    for pulse_user in dict_users.keys():
+        dict_users[pulse_user].sort()
+        users.append((pulse_user, (', ').join(dict_users[pulse_user])))
+
     return render_template('all_pulse_users.html', users=users)
+
 
 @app.route('/queues')
 @requires_login
@@ -220,6 +239,51 @@ def queues_listing():
         no_owner_queues = list(Queue.query.filter(Queue.owner == None))
     return render_template('queues_listing.html', users=users,
                            no_owner_queues=no_owner_queues)
+
+
+@app.route('/invites')
+@requires_login
+def invites():
+    pulse_users = PulseUser.query.filter(
+        Invite.user_id == g.user.id).join(Invite).all()
+
+    return render_template('invites.html', pulse_users=pulse_users)
+
+
+@app.route('/accept_invite/<pulse_user_id>')
+@requires_login
+def accept_invite(pulse_user_id):
+    invite = Invite.query.filter(Invite.user_id == g.user.id,
+                                 Invite.pulse_user_id == pulse_user_id).first()
+
+    pulse_user = PulseUser.query.filter(
+        PulseUser.id == invite.pulse_user_id).first()
+
+    # Update pulse_user
+    pulse_user.users.append(g.user)
+
+    # Removing invite
+    db_session.delete(invite)
+    db_session.commit()
+
+    return redirect('/profile')
+
+
+@app.route('/reject_invite/<pulse_user_id>')
+@requires_login
+def reject_invite(pulse_user_id):
+    invite = Invite.query.filter(Invite.user_id == g.user.id,
+                                 Invite.pulse_user_id == pulse_user_id).first()
+
+    pulse_user = PulseUser.query.filter(PulseUser.id == invite.pulse_user_id).first()
+
+    # Removing rows from the database
+    db_session.delete(invite)
+    db_session.delete(pulse_user)
+
+    db_session.commit()
+
+    return redirect('/profile')
 
 
 # API
@@ -248,19 +312,51 @@ def delete_queue(queue_name):
 @requires_login
 def delete_pulse_user(pulse_username):
     logging.info('Request to delete Pulse user "{0}".'.format(pulse_username))
-    pulse_user = PulseUser.query.filter(PulseUser.username == pulse_username).first()
+    pulse_user = PulseUser.query.filter(
+        PulseUser.username == pulse_username).first()
 
-    if pulse_user and (g.user.admin or pulse_user.owner == g.user):
+    if pulse_user and (g.user.admin or pulse_user in g.user.pulse_users):
+        # Take care of pending invites
+        invites = Invite.query.filter(
+            Invite.pulse_user_id == pulse_user.id).all()
+        for invite in invites:
+            db_session.delete(invite)
+            db_session.commit()
+
+        # We can now safely delete pulse_user
         try:
             pulse_management.delete_user(pulse_user.username)
         except pulse_management.PulseManagementException as e:
             logging.warning("Couldn't delete user '{0}' on "
-                               "rabbitmq: {1}".format(pulse_username, e))
+                            "rabbitmq: {1}".format(pulse_username, e))
             return jsonify(ok=False)
         logging.info('Pulse user "{0}" deleted.'.format(pulse_username))
         db_session.delete(pulse_user)
         db_session.commit()
         return jsonify(ok=True)
+
+    return jsonify(ok=False)
+
+
+@app.route('/unfollow/pulse-user/<pulse_username>', methods=['DELETE'])
+@requires_login
+def unfollow_pulse_user(pulse_username):
+    logging.info(
+        'Request to unfollow Pulse user "{0}".'.format(pulse_username))
+    pulse_user = PulseUser.query.filter(
+        PulseUser.username == pulse_username).first()
+
+    if pulse_user and pulse_user in g.user.pulse_users:
+        # Check if there are more users following this pulse_user
+        if len(pulse_user.users) > 1:
+            g.user.pulse_users.remove(pulse_user)
+            db_session.commit()
+            return jsonify(ok=True)
+        else:
+            # User is the only one respoonsible for this pulse_use.
+            # Can't unfollow.
+            logging.warning(
+                "Couldn't unfollow pulse_user '{0}'".format(pulse_username))
 
     return jsonify(ok=False)
 
@@ -341,6 +437,9 @@ def register_handler():
     username = request.form['username']
     password = request.form['password']
     password_verification = request.form['password-verification']
+    invited_users = [user.strip()
+                     for user in request.form['users'].split(',')
+                     if user != '']
     email = session['email']
     errors = []
 
@@ -373,9 +472,20 @@ def register_handler():
         return render_template('register.html', email=email,
                                signup_errors=errors)
 
-    PulseUser.new_user(username, password, g.user)
+    pulse_user = PulseUser.new_user(username, password, g.user)
+    for invited_user in invited_users:
+        user = User.query.filter(User.email == invited_user).first()
+        # If user does not exist, warn.
+        if not user:
+            errors.append(('User {0} does not exist').format(invited_user))
+        # Check if User is inviting himself.
+        elif user.id == g.user.id:
+            errors.append('Cannot invite yourself.')
+        # If everything is ok, register invite
+        else:
+            Invite.new_invite(user.id, pulse_user.id)
 
-    return redirect('/profile')
+    return profile(messages=errors if len(errors) != 0 else None)
 
 
 @app.route('/auth/logout', methods=['POST'])

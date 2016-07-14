@@ -1,0 +1,26 @@
+{% extends 'base.html' %}
+
+{% block body %}
+<div class="col-md-12">
+  <h3>All invites</h3>
+  <ul class="list-group pulse-users">
+    {% for pulse_user in pulse_users %}
+      <li class="list-group-item pulse-user"
+          data-pulse-user-name="{{pulse_user.username}}">
+        <h4>
+          {{pulse_user.username}}
+          <span class="pull-right">
+            <a href="/accept_invite/{{pulse_user.id}}">
+              <span class="glyphicon glyphicon-ok accept"></span>
+            </a>
+            <a href="/reject_invite/{{pulse_user.id}}">
+              <span class="glyphicon glyphicon-remove reject"></span>
+            </a>
+          </span>
+        </h4>
+      </li>
+     {% endfor %}
+  </ul>
+</div>
+{% endblock %}
+

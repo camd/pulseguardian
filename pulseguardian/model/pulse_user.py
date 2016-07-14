@@ -20,7 +20,6 @@ class PulseUser(Base):
     __tablename__ = 'pulse_users'
 
     id = Column(Integer, primary_key=True)
-    owner_id = Column(Integer, ForeignKey('users.id'), nullable=True)
     username = Column(String(255), unique=True)
 
     queues = relationship(
@@ -35,7 +34,7 @@ class PulseUser(Base):
         :param create_rabbitmq_user: Whether to add this user to the rabbitmq
         server via the management plugin.  Used by tests.
         """
-        pulse_user = PulseUser(owner=owner, username=username)
+        pulse_user = PulseUser(users=[owner], username=username)
 
         if create_rabbitmq_user:
             pulse_user._create_user(password)
@@ -82,7 +81,6 @@ class PulseUser(Base):
                                         write=write_conf_perms)
 
     def __repr__(self):
-        return "<PulseUser(username='{0}', owner='{1}')>".format(self.username,
-                                                                 self.owner)
+        return "<PulseUser(username='{0}')>".format(self.username)
 
     __str__ = __repr__

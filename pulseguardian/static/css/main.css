@@ -108,6 +108,32 @@ a:hover, a:active, a:focus {
   color: #e52e38;
 }
 
+.unfollow {
+  cursor: pointer;
+}
+
+.unfollow:hover {
+  color: #555555;
+}
+
+.reject {
+  color: #e10809;
+  cursor: pointer;
+}
+
+.reject:hover {
+  color: #e52e38;
+}
+
+.accept {
+  color: #32CD32;
+  cursor: pointer;
+}
+
+.accept:hover {
+  color: #62CD62;
+}
+
 .autoreload {
     color: #30a53c;
     float: right;

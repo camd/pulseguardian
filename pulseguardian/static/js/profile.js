@@ -23,8 +23,20 @@ $(document).ready(function() {
         });
     }
 
+    function unfollowObjecthandler(objectType) {
+        $('.' + objectType + 's .unfollow').click(function() {
+            var objectInstance = $(this).closest('.' + objectType);
+            var objectName = objectInstance.data(objectType + '-name');
+            var modal = $('.modal-unfollow-' + objectType);
+            modal.data(objectType + '-object', objectInstance);
+            modal.find('.' + objectType + '-name').text(objectName);
+            modal.modal();
+        });
+    }
+
     deleteableObjectHandler('queue');
     deleteableObjectHandler('pulse-user');
+    unfollowObjecthandler('pulse-user');
 
     $('.pulse-users .edit').click(function() {
         var details = $($(this).closest('.pulse-user'))
@@ -82,6 +94,38 @@ $(document).ready(function() {
         });
     }
 
+    function unfollowableObject(objectType) {
+        function unfollowObject(objectInstance, objectName) {
+            $.ajax({
+                url: '/' + 'unfollow/' + objectType + '/' + objectName,
+                type: 'DELETE',
+                success: function(result) {
+                    if (!result.ok) {
+                        errorMessage("Couldn't unfollow " + objectType + " '" +
+                                     objectName + "'.");
+                        return;
+                    }
+
+                    $(objectInstance).slideUp(300);
+                },
+                error: function() {
+                    errorMessage("Couldn't unfollow " + objectType + " '" +
+                             objectName + "'.");
+                },
+                complete: function() {
+                    $('.modal-unfollow-' + objectType).modal('hide');
+                }
+            });
+        }
+
+        var modalClass = '.modal-unfollow-' + objectType;
+        $(modalClass + ' .unfollow-' + objectType + '-ok').click(function() {
+            unfollowObject($(modalClass).data(objectType + '-object'),
+                         $(modalClass + ' .' + objectType + '-name').text());
+        });
+    }
+
     deleteableObject('queue');
     deleteableObject('pulse-user');
+    unfollowableObject('pulse-user');
 });
